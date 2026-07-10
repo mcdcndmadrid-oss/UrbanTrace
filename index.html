@@ -1225,11 +1225,23 @@ var CACHE=[];
 
 /* ================= IndexedDB ================= */
 function openDB(){ return new Promise(function(res,rej){
-  var rq = indexedDB.open('urbantrace',1);
-  rq.onupgradeneeded = function(e){ e.target.result.createObjectStore('incidencias',{keyPath:'uuid'}); };
+  var rq = indexedDB.open('urbantrace',2);
+  rq.onupgradeneeded = function(e){
+    var d=e.target.result;
+    if(!d.objectStoreNames.contains('incidencias')) d.createObjectStore('incidencias',{keyPath:'uuid'});
+    if(!d.objectStoreNames.contains('originales')) d.createObjectStore('originales');
+  };
   rq.onsuccess = function(e){ res(e.target.result); };
   rq.onerror = function(){ rej(rq.error); };
 });}
+function origStore(mode){ return db.transaction('originales',mode).objectStore('originales'); }
+function putOrig(u,blob){ return reqP(origStore('readwrite').put(blob,u)); }
+function delOrig(u){ return reqP(origStore('readwrite').delete(u)); }
+function bufHashHex(buf){
+  return crypto.subtle.digest('SHA-256',buf).then(function(h){
+    return Array.from(new Uint8Array(h)).map(function(b){return b.toString(16).padStart(2,'0');}).join('');
+  });
+}
 function store(mode){ return db.transaction('incidencias',mode).objectStore('incidencias'); }
 function reqP(rq){ return new Promise(function(res,rej){ rq.onsuccess=function(){res(rq.result);}; rq.onerror=function(){rej(rq.error);}; }); }
 function getAll(){ return reqP(store('readonly').getAll()).then(function(list){
@@ -1541,11 +1553,21 @@ $('btn-cam-retry').addEventListener('click', function(){ startCamera(); });
 $('btn-shoot').addEventListener('click', function(){
   var v=$('video');
   if(!stream || !v.videoWidth){ $('file-input').click(); return; }
-  var max=1600, sc=Math.min(1,max/Math.max(v.videoWidth,v.videoHeight));
+  var full=document.createElement('canvas');
+  full.width=v.videoWidth; full.height=v.videoHeight;
+  full.getContext('2d').drawImage(v,0,0);
+  /* original a máxima resolución: hash calculado ANTES de cualquier procesado */
+  var origP=new Promise(function(res){
+    full.toBlob(function(b){
+      if(!b){ res(null); return; }
+      b.arrayBuffer().then(bufHashHex).then(function(h){ res({blob:b, size:b.size, hash:h}); });
+    },'image/jpeg',0.95);
+  });
+  var max=1600, sc=Math.min(1,max/Math.max(full.width,full.height));
   var c=document.createElement('canvas');
-  c.width=Math.round(v.videoWidth*sc); c.height=Math.round(v.videoHeight*sc);
-  c.getContext('2d').drawImage(v,0,0,c.width,c.height);
-  finishCapture(c);
+  c.width=Math.round(full.width*sc); c.height=Math.round(full.height*sc);
+  c.getContext('2d').drawImage(full,0,0,c.width,c.height);
+  finishCapture(c, origP);
 });
 /* ---- EXIF: distancia focal equivalente 35 mm (tag 0xA405) ---- */
 var pendingF35=null;
@@ -1575,7 +1597,7 @@ function exifF35(buf){
   }catch(err){}
   return null;
 }
-function canvasFromFile(f){
+function canvasFromFile(f, origP){
   var img=new Image();
   img.onload=function(){
     URL.revokeObjectURL(img.src);
@@ -1583,7 +1605,7 @@ function canvasFromFile(f){
     var c=document.createElement('canvas');
     c.width=Math.round(img.naturalWidth*sc); c.height=Math.round(img.naturalHeight*sc);
     c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-    finishCapture(c);
+    finishCapture(c, origP);
   };
   img.src=URL.createObjectURL(f);
 }
@@ -1591,8 +1613,13 @@ $('file-input').addEventListener('change', function(e){
   var f=e.target.files && e.target.files[0]; e.target.value='';
   if(!f) return;
   var fr=new FileReader();
-  fr.onload=function(){ pendingF35=exifF35(fr.result); canvasFromFile(f); };
-  fr.onerror=function(){ pendingF35=null; canvasFromFile(f); };
+  fr.onload=function(){
+    pendingF35=exifF35(fr.result);
+    /* el archivo original (bytes exactos, EXIF intacto) es la evidencia: hash antes de tocarlo */
+    var origP=bufHashHex(fr.result).then(function(h){ return {blob:f, size:f.size, hash:h}; });
+    canvasFromFile(f, origP);
+  };
+  fr.onerror=function(){ pendingF35=null; canvasFromFile(f, null); };
   fr.readAsArrayBuffer(f);
 });
 
@@ -1678,25 +1705,58 @@ function setupReviewVisual(){
 }
 function drawOverlay(){
   var cv=$('rv-overlay'), an=draft.an;
-  var W=an?an.mw:160, H=an?an.mh:Math.max(1,Math.round(160*draft.h/draft.w));
-  cv.width=W; cv.height=H;
+  var OW=320, OH=Math.max(1,Math.round(OW*draft.h/draft.w));
+  cv.width=OW; cv.height=OH;
   var x=cv.getContext('2d');
-  x.clearRect(0,0,W,H);
+  x.imageSmoothingEnabled=false;
+  x.clearRect(0,0,OW,OH);
   if(an && an.mask){
-    var img=x.createImageData(W,H);
+    var W=an.mw, H=an.mh;
+    var mc=document.createElement('canvas'); mc.width=W; mc.height=H;
+    var mx=mc.getContext('2d');
+    var img=mx.createImageData(W,H);
     for(var i=0;i<W*H;i++){
       if(!an.mask[i]) continue;
       var px=i%W, py=(i/W)|0;
       var edge = px===0||py===0||px===W-1||py===H-1 ||
         !an.mask[i-1]||!an.mask[i+1]||!an.mask[i-W]||!an.mask[i+W];
       var o=i*4; img.data[o]=57; img.data[o+1]=209; img.data[o+2]=201;
-      img.data[o+3]=edge?235:55;
+      img.data[o+3]=edge?235:60;
     }
-    x.putImageData(img,0,0);
+    mx.putImageData(img,0,0);
+    var rg=draft.anRegion||[0,0,1,1];
+    x.drawImage(mc, rg[0]*OW, rg[1]*OH, (rg[2]-rg[0])*OW, (rg[3]-rg[1])*OH);
   }
   var b=draft.bboxN;
-  x.strokeStyle='rgba(255,255,255,.95)'; x.setLineDash([4,3]); x.lineWidth=1.4;
-  x.strokeRect(b[0]*W, b[1]*H, (b[2]-b[0])*W, (b[3]-b[1])*H);
+  x.strokeStyle='rgba(255,255,255,.95)'; x.setLineDash([5,4]); x.lineWidth=1.6;
+  x.strokeRect(b[0]*OW, b[1]*OH, (b[2]-b[0])*OW, (b[3]-b[1])*OH);
+}
+function reanalyze(){
+  if(!draft || !draft.srcCanvas) return;
+  var b=draft.bboxN;
+  var sx=Math.round(b[0]*draft.w), sy=Math.round(b[1]*draft.h);
+  var sw=Math.round((b[2]-b[0])*draft.w), sh=Math.round((b[3]-b[1])*draft.h);
+  if(sw<32 || sh<32){ calcM2(); return; }
+  var c=document.createElement('canvas'); c.width=sw; c.height=sh;
+  c.getContext('2d').drawImage(draft.srcCanvas, sx,sy,sw,sh, 0,0,sw,sh);
+  var an2=analyzeGraffiti(c);
+  if(an2){
+    draft.an=an2; draft.anRegion=b.slice();
+    if(an2.colores.length){
+      draft.colores=an2.colores;
+      $('rv-colors').innerHTML=an2.colores.map(function(cc){
+        return '<span style="display:inline-block;width:15px;height:15px;border-radius:4px;background:'+cc+';border:1px solid var(--line);margin-left:4px;vertical-align:middle"></span>';
+      }).join('');
+    }
+    $('rv-trazo').textContent=(an2.stroke<0.03?'Fino':(an2.stroke<0.07?'Medio':'Grueso'))+' · '+an2.nColores+' color'+(an2.nColores>1?'es':'');
+    rvTipo=an2.tipoSug; renderTipoSev();
+    $('rv-sug').innerHTML='Sugerencia recalculada sobre la zona ajustada: <b style="color:var(--brand)">'+an2.tipoSug+'</b>';
+    $('rv-tag').textContent='contorno recalculado · zona ajustada';
+  } else {
+    draft.an=null; draft.anRegion=null;
+    $('rv-tag').textContent='sin detección en la zona · recuadro manual';
+  }
+  drawOverlay(); calcM2();
 }
 function makeHandles(){
   var fit=$('rv-fit');
@@ -1733,7 +1793,7 @@ function hMove(e){
   var i=+dragH.getAttribute('data-i'), b=draft.bboxN;
   if(i===0||i===3) b[0]=Math.min(nx,b[2]-.05); else b[2]=Math.max(nx,b[0]+.05);
   if(i===0||i===1) b[1]=Math.min(ny,b[3]-.05); else b[3]=Math.max(ny,b[1]+.05);
-  drawOverlay(); updateHandles(); calcM2();
+  drawOverlay(); updateHandles();
 }
 function hUp(){
   if(!dragH) return;
@@ -1741,17 +1801,22 @@ function hUp(){
   dragH.removeEventListener('pointerup',hUp);
   dragH.removeEventListener('pointercancel',hUp);
   dragH=null;
+  reanalyze();
 }
 function calcM2(){
   if(!draft) return;
   var b=draft.bboxN, frac;
-  if(draft.an && draft.an.mask){
-    var W=draft.an.mw, H=draft.an.mh, cnt=0;
-    var x0=Math.max(0,Math.floor(b[0]*W)), x1=Math.min(W,Math.ceil(b[2]*W));
-    var y0=Math.max(0,Math.floor(b[1]*H)), y1=Math.min(H,Math.ceil(b[3]*H));
-    for(var y=y0;y<y1;y++) for(var x=x0;x<x1;x++) if(draft.an.mask[y*W+x]) cnt++;
-    frac=cnt/(W*H);
-    if(cnt < (x1-x0)*(y1-y0)*0.05) frac=(b[2]-b[0])*(b[3]-b[1])*0.75;
+  var an=draft.an, rg=draft.anRegion;
+  if(an && an.mask && rg){
+    var W=an.mw, H=an.mh;
+    var rw=Math.max(1e-6,rg[2]-rg[0]), rh=Math.max(1e-6,rg[3]-rg[1]);
+    var u0=Math.max(0,(b[0]-rg[0])/rw), u1=Math.min(1,(b[2]-rg[0])/rw);
+    var v0=Math.max(0,(b[1]-rg[1])/rh), v1=Math.min(1,(b[3]-rg[1])/rh);
+    var x0=Math.floor(u0*W), x1=Math.ceil(u1*W), y0=Math.floor(v0*H), y1=Math.ceil(v1*H);
+    var cnt=0;
+    for(var y=y0;y<y1;y++) for(var x=x0;x<x1;x++) if(an.mask[y*W+x]) cnt++;
+    frac=(cnt/(W*H))*(rw*rh);
+    if(cnt < Math.max(1,(x1-x0)*(y1-y0))*0.05) frac=(b[2]-b[0])*(b[3]-b[1])*0.75;
   } else frac=(b[2]-b[0])*(b[3]-b[1])*0.75;
   var d=draft.dist||2;
   var half=(draft.fov||66)/2*Math.PI/180;
@@ -1768,7 +1833,7 @@ $('rv-dist').addEventListener('input', function(){
   calcM2();
 });
 
-function finishCapture(canvas){
+function finishCapture(canvas, origP){
   stopCamera();
   var dataUrl=canvas.toDataURL('image/jpeg',0.82);
   var q=grayStats(canvas);
@@ -1777,6 +1842,8 @@ function finishCapture(canvas){
   draft={ foto:dataUrl, sharp:Math.round(q.sharp), colores:colors, an:an,
           lat:lastFix?lastFix.lat:null, lon:lastFix?lastFix.lon:null, acc:lastFix?lastFix.acc:null };
   draft.w=canvas.width; draft.h=canvas.height;
+  draft.srcCanvas=canvas; draft.origP=origP||null;
+  draft.anRegion = an? [0,0,1,1] : null;
   draft.dist=2.0;
   var calF=parseFloat(localStorage.getItem('ut_fov')||'');
   if(pendingF35){
@@ -1836,7 +1903,8 @@ function finishCapture(canvas){
 $('btn-save').addEventListener('click', function(){
   if(!draft) return;
   var btn=$('btn-save'); btn.disabled=true;
-  sha256hex(draft.foto).then(function(hash){
+  Promise.all([sha256hex(draft.foto), Promise.resolve(draft.origP)]).then(function(pr){
+    var hash=pr[0], orig=pr[1];
     return getAll().then(function(list){
       var yr=new Date().getFullYear();
       var seq=list.length+1, folio;
@@ -1845,8 +1913,10 @@ $('btn-save').addEventListener('click', function(){
       var sup=$('rv-sup').value;
       var m2f = draft.m2!=null ? draft.m2 : (draft.an?draft.an.m2:1);
       var tam = tamCat(m2f);
-      return put({
+      var rec={
         uuid:uuid(), folio:folio, fecha:new Date().toISOString(),
+        hashOriginal: orig?orig.hash:null, origSize: orig?orig.size:null,
+        origEstado: orig?'retenida':null,
         foto:draft.foto, lat:draft.lat, lon:draft.lon, acc:draft.acc,
         sharp:draft.sharp, colores:draft.colores,
         patron:draft.an?draft.an.sig:null, m2:m2f, distancia:draft.dist||null, bbox:draft.bboxN,
@@ -1856,7 +1926,8 @@ $('btn-save').addEventListener('click', function(){
         notas:$('rv-notas').value.trim(), hash:hash,
         usuario:'agente.demo', dispositivo:(navigator.userAgent.match(/\(([^;)]+)/)||[,'Móvil'])[1],
         estado:'Nuevo', sync:'pendiente'
-      });
+      };
+      return put(rec).then(function(){ return orig? putOrig(rec.uuid, orig.blob) : null; });
     });
   }).then(function(){
     draft=null; btn.disabled=false; show('list');
@@ -1927,7 +1998,11 @@ $('btn-sync').addEventListener('click', function(){
     var chain=Promise.resolve();
     pend.forEach(function(r){
       chain=chain.then(function(){return new Promise(function(res){setTimeout(res,650);});})
-        .then(function(){ r.sync='enviada'; return put(r); })
+        .then(function(){
+          r.sync='enviada';
+          if(r.origEstado==='retenida'){ r.origEstado='depositada'; r.origFecha=new Date().toISOString(); }
+          return put(r);
+        })
         .then(renderList);
     });
     chain.then(function(){ renderList(); updateQueue(); });
@@ -2077,6 +2152,7 @@ function openFicha(u, origin){
 
       '<div class="card" style="padding:14px">'+
         '<div class="lbl" style="margin-bottom:4px">Localización</div>'+
+        metaRow('Dirección','<span id="fi-dir">…</span>')+
         metaRow('Coordenadas', r.lat!=null? r.lat.toFixed(6)+', '+r.lon.toFixed(6) : 'No disponibles', true)+
         metaRow('Precisión', r.acc!=null?'± '+Math.round(r.acc)+' m':'—', true)+
         metaRow('Mapa', mapsLink)+
@@ -2098,7 +2174,15 @@ function openFicha(u, origin){
           '<span style="color:var(--brand);display:flex">'+ico('lock',14)+'</span>'+
           '<span class="lbl">Integridad y cadena de custodia</span>'+
         '</div>'+
-        metaRow('Hash SHA-256', (r.hash||'').slice(0,18)+'…', true)+
+        (r.hashOriginal? metaRow('Hash original', r.hashOriginal.slice(0,18)+'…', true):'')+
+        metaRow(r.hashOriginal?'Hash procesada':'Hash SHA-256', (r.hash||'').slice(0,18)+'…', true)+
+        (r.hashOriginal? metaRow('Foto original',
+            r.origEstado==='depositada'
+              ? '<span class="badge chip-low">'+ico('check',11)+'Depositada en repositorio probatorio</span>'
+              : '<span class="badge chip-warn">Retenida en dispositivo · pendiente de depósito</span>')
+          :'')+
+        (r.origSize? metaRow('Peso original / operativa',
+            (r.origSize/1048576).toFixed(1).replace('.',',')+' MB / '+Math.round((r.foto.length*3/4)/1024)+' KB', true):'')+
         metaRow('Estado de la prueba','<span class="badge chip-low">Sellado · íntegro</span>')+
         metaRow('Modificaciones','0 · registro completo', true)+
         metaRow('UUID', r.uuid.slice(0,18)+'…', true)+
@@ -2132,8 +2216,31 @@ function openFicha(u, origin){
     });
     $('fi-borrar').addEventListener('click',function(){
       if(!confirm('¿Eliminar '+r.folio+' del dispositivo?')) return;
-      delRec(u).then(function(){ show(fichaOrigin==='map'?'map':'list'); });
+      delRec(u).then(function(){ return delOrig(u); })
+        .then(function(){ show(fichaOrigin==='map'?'map':'list'); });
     });
+    /* dirección por geocodificación inversa (Nominatim/OSM), cacheada en la incidencia */
+    if(r.lat==null){ $('fi-dir').textContent='—'; }
+    else if(r.direccion){ $('fi-dir').textContent=r.direccion; }
+    else {
+      $('fi-dir').textContent='buscando dirección…';
+      fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=es&lat='+r.lat+'&lon='+r.lon)
+        .then(function(rs){ return rs.json(); })
+        .then(function(j){
+          var a=j.address||{};
+          var via=(a.road||a.pedestrian||a.footway||a.square||'')+(a.house_number?' '+a.house_number:'');
+          var zona=a.suburb||a.quarter||a.city_district||'';
+          var pobl=(a.postcode? a.postcode+' ':'')+(a.city||a.town||a.village||a.municipality||'');
+          var dir=[via,zona,pobl].filter(function(s){return s && s.trim();}).join(', ') || j.display_name || '';
+          var el=$('fi-dir'); if(!el) return;
+          if(!dir){ el.textContent='no disponible'; return; }
+          el.textContent=dir;
+          r.direccion=dir; put(r);
+        })
+        .catch(function(){
+          var el=$('fi-dir'); if(el) el.textContent='no disponible (sin conexión al geocodificador)';
+        });
+    }
     if(fichaMap){ fichaMap.remove(); fichaMap=null; }
     if(r.lat!=null) testTiles(function(ok){
       if(!ok) return;
@@ -2313,7 +2420,12 @@ function seedDemo(){
           rec.fotoPost=makeCleanPhoto(3000+i*13);
           rec.fechaLimpieza=new Date(fecha.getTime()+(1+r()*6)*864e5).toISOString();
         }
-        return sha256hex(foto).then(function(h){ rec.hash=h; return put(rec); });
+        return sha256hex(foto).then(function(h){
+          rec.hash=h; rec.hashOriginal=h;
+          rec.origEstado='depositada'; rec.origFecha=rec.fecha;
+          rec.origSize=Math.round(2500000+r()*3000000);
+          return put(rec);
+        });
       });
     })(i);
     chain.then(function(){ $('btn-demo').disabled=false; renderList(); updateQueue(); });
