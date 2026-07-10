@@ -273,7 +273,7 @@
   /* =========================================================
      Modo apaisado (móvil girado): la app entera se adapta
      ========================================================= */
-  @media (orientation: landscape) and (max-height: 620px){
+  @media (orientation: landscape) and (pointer: coarse){
     #app{max-width:none}
     /* cámara: visor a ancho completo, obturador en columna lateral derecha */
     #scr-cam{flex-direction:row}
@@ -293,6 +293,11 @@
     .tb-title{font-size:19px}
     .tabbar{padding:4px 14px calc(6px + env(safe-area-inset-bottom))}
     .stepper{padding:8px 10px 6px}
+    /* panel de calidad compacto sobre el visor */
+    .qpanel{padding:8px 10px;left:10px;right:10px;bottom:10px}
+    .qp-head{margin-bottom:6px}
+    .cam-chips{top:10px;left:10px}
+    #btn-calib{top:10px;right:10px}
   }
 
   @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
