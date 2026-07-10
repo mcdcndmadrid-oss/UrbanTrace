@@ -270,6 +270,31 @@
   a.ext{color:var(--brand);font-weight:600;text-decoration:none}
   a.ext:hover{text-decoration:underline}
 
+  /* =========================================================
+     Modo apaisado (móvil girado): la app entera se adapta
+     ========================================================= */
+  @media (orientation: landscape) and (max-height: 620px){
+    #app{max-width:none}
+    /* cámara: visor a ancho completo, obturador en columna lateral derecha */
+    #scr-cam{flex-direction:row}
+    .cam-stage{flex:1}
+    .shutter-row{flex-direction:column;width:116px;padding:14px 0;justify-content:center;flex:none}
+    .side-act.left{left:50%;top:16px;transform:translateX(-50%)}
+    .side-act.right{right:auto;left:50%;bottom:16px;transform:translateX(-50%)}
+    /* revisión y ficha: dos columnas */
+    #scr-review .scroll, #scr-ficha .scroll{
+      display:grid;grid-template-columns:1fr 1fr;gap:12px;align-content:start;align-items:start}
+    #btn-save,#btn-reanalizar{grid-column:1/-1}
+    /* lista de incidentes: rejilla de dos columnas */
+    #list-body{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-content:start}
+    #list-body .empty{grid-column:1/-1}
+    /* barras más compactas para aprovechar la altura */
+    .topbar{padding:10px 18px 8px}
+    .tb-title{font-size:19px}
+    .tabbar{padding:4px 14px calc(6px + env(safe-area-inset-bottom))}
+    .stepper{padding:8px 10px 6px}
+  }
+
   @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
 </style>
 <style>/* required styles */
@@ -1643,6 +1668,12 @@ function updateOrientGuard(){
 }
 window.addEventListener('resize', updateOrientGuard);
 window.addEventListener('orientationchange', updateOrientGuard);
+/* re-encajar las fotos al girar el dispositivo */
+var fichaRefit=null;
+window.addEventListener('resize', function(){
+  if(draft && !$('scr-review').hidden) requestAnimationFrame(setupReviewVisual);
+  if(fichaRefit && !$('scr-ficha').hidden) requestAnimationFrame(function(){ fichaRefit(); });
+});
 
 $('btn-shoot').addEventListener('click', function(){
   if(!isLandscape()) return;
@@ -2528,6 +2559,7 @@ function openFicha(u, origin){
         if(hint) hint.textContent='toca para ver completo';
       }
       function refitZoom(){ refit(); fiZoom(); }
+      fichaRefit=refitZoom;
       if(img.complete) requestAnimationFrame(refitZoom); else img.onload=refitZoom;
       var fphoto=$('fi-photo');
       if(fphoto && r.bbox) fphoto.addEventListener('click', function(){ fz=!fz; fiZoom(); });

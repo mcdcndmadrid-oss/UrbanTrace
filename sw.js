@@ -1,5 +1,5 @@
 /* UrbanTrace — service worker: cache-first para funcionar sin conexión */
-var CACHE = 'urbantrace-v14';
+var CACHE = 'urbantrace-v15';
 var ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', function (e) {
