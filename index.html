@@ -957,6 +957,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="qp-chips" id="qp-chips"></div>
       </div>
       <button class="badge cam-badge" id="btn-calib" style="position:absolute;top:14px;right:14px;z-index:6;border:0;cursor:pointer;font-family:inherit"></button>
+      <div id="rot-overlay" style="display:none;position:absolute;inset:0;z-index:9;background:rgba(11,14,18,.9);
+        flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#dfe6ef;text-align:center;padding:24px">
+        <span data-ico="sync|36"></span>
+        <b style="font-size:16px">Gira el móvil</b>
+        <span style="font-size:13px;color:#8b93a4;max-width:260px">La captura se realiza siempre en formato apaisado para normalizar las evidencias</span>
+      </div>
       <div id="calib" hidden style="position:absolute;inset:0;z-index:8">
         <div style="position:absolute;inset:0;background:rgba(0,0,0,.2)"></div>
         <div style="position:absolute;left:14px;right:14px;top:14px;background:rgba(12,16,22,.75);backdrop-filter:blur(10px);
@@ -1451,8 +1457,8 @@ function show(name){
   var tab = TAB_OF[name];
   if(tab) document.querySelectorAll('.tab-btn').forEach(function(b){
     b.classList.toggle('on', b.getAttribute('data-tab')===tab); });
-  if(name==='cam'){ startCamera(); startGeo(); }
-  else { stopCamera(); if(name!=='review') stopGeo(); }
+  if(name==='cam'){ startCamera(); startGeo(); tryLockLandscape(); }
+  else { stopCamera(); unlockOrient(); if(name!=='review') stopGeo(); }
   if(name==='map') renderMap();
   if(name==='list') renderList();
 }
@@ -1488,6 +1494,7 @@ function stopGeo(){ if(geoWatch!=null){ navigator.geolocation.clearWatch(geoWatc
 /* ================= cámara + calidad en vivo ================= */
 function startCamera(){
   updateQueue();
+  updateOrientGuard();
   if(stream) return;
   $('cam-fallback').hidden=true; $('cam-frame').style.display=''; $('qpanel').style.display='';
   if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ camFail(); return; }
@@ -1567,7 +1574,30 @@ $('btn-shoot').innerHTML = ico('camera',28,2.2);
 $('btn-gallery').addEventListener('click', function(){ $('file-input').click(); });
 $('btn-file-fb').addEventListener('click', function(){ $('file-input').click(); });
 $('btn-cam-retry').addEventListener('click', function(){ startCamera(); });
+/* ---- captura forzada en apaisado ---- */
+function isLandscape(){ return window.innerWidth > window.innerHeight; }
+function tryLockLandscape(){
+  try{
+    if(screen.orientation && screen.orientation.lock)
+      screen.orientation.lock('landscape').catch(function(){});
+  }catch(e){}
+}
+function unlockOrient(){
+  try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}
+}
+function updateOrientGuard(){
+  var ov=$('rot-overlay');
+  var camVisible = !$('scr-cam').hidden;
+  var ok = isLandscape();
+  ov.style.display = (camVisible && !ok) ? 'flex' : 'none';
+  $('btn-shoot').disabled = camVisible && !ok;
+  $('btn-shoot').style.opacity = (camVisible && !ok) ? '.35' : '';
+}
+window.addEventListener('resize', updateOrientGuard);
+window.addEventListener('orientationchange', updateOrientGuard);
+
 $('btn-shoot').addEventListener('click', function(){
+  if(!isLandscape()) return;
   var v=$('video');
   if(!stream || !v.videoWidth){ $('file-input').click(); return; }
   var full=document.createElement('canvas');
@@ -1619,6 +1649,10 @@ function canvasFromFile(f, origP){
   img.onload=function(){
     URL.revokeObjectURL(img.src);
     var max=1600, sc=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
+    if(img.naturalHeight>img.naturalWidth){
+      alert('La foto está en formato vertical. Las capturas deben hacerse en apaisado: gira el móvil y repítela.');
+      return;
+    }
     var c=document.createElement('canvas');
     c.width=Math.round(img.naturalWidth*sc); c.height=Math.round(img.naturalHeight*sc);
     c.getContext('2d').drawImage(img,0,0,c.width,c.height);
@@ -1805,6 +1839,14 @@ function reanalyze(){
   rvZoom(true);
 }
 $('btn-reanalizar').addEventListener('click', function(){ reanalyze(); });
+/* ¿el recuadro cambió desde el último análisis? */
+function bboxDirty(){
+  if(!draft) return false;
+  var b=draft.bboxN, rg=draft.anRegion;
+  if(!rg) return true;
+  for(var i=0;i<4;i++) if(Math.abs(b[i]-rg[i])>0.005) return true;
+  return false;
+}
 function makeHandles(){
   var fit=$('rv-fit');
   fit.querySelectorAll('.handle').forEach(function(h){ h.remove(); });
@@ -1951,6 +1993,8 @@ function finishCapture(canvas, origP){
 }
 $('btn-save').addEventListener('click', function(){
   if(!draft) return;
+  /* salvaguarda: si el recuadro cambió sin recalcular, el análisis se rehace antes de persistir */
+  if(bboxDirty()) reanalyze();
   var btn=$('btn-save'); btn.disabled=true;
   Promise.all([sha256hex(draft.foto), Promise.resolve(draft.origP)]).then(function(pr){
     var hash=pr[0], orig=pr[1];
@@ -2472,6 +2516,10 @@ $('post-input').addEventListener('change', function(e){
   var img=new Image();
   img.onload=function(){
     URL.revokeObjectURL(img.src);
+    if(img.naturalHeight>img.naturalWidth){
+      alert('La foto de limpieza está en vertical. Gira el móvil y repítela en apaisado.');
+      return;
+    }
     var max=1600, sc=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));
     var c=document.createElement('canvas');
     c.width=Math.round(img.naturalWidth*sc); c.height=Math.round(img.naturalHeight*sc);
