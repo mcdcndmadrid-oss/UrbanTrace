@@ -188,6 +188,28 @@
   .ph-tag{position:absolute;top:8px;left:8px;font-family:var(--font-mono);font-size:9px;letter-spacing:.08em;
     text-transform:uppercase;background:var(--brand);color:var(--brand-ink);padding:2px 7px;border-radius:4px;z-index:2}
   .duo{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .handle{position:absolute;width:20px;height:20px;border-radius:50%;background:var(--cam-accent);
+    border:3px solid #fff;transform:translate(-50%,-50%);touch-action:none;cursor:grab;z-index:5;
+    box-shadow:0 1px 5px rgba(0,0,0,.45)}
+
+  /* ---- calibración de óptica ---- */
+  .cal-line{position:absolute;top:0;bottom:0;width:3px;background:var(--cam-accent);touch-action:none;cursor:ew-resize;z-index:2}
+  .cal-line .cal-knob{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:32px;height:32px;
+    border-radius:50%;background:var(--cam-accent);border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.5)}
+
+  /* ---- barra de estados de tramitación ---- */
+  .stepper{display:flex;padding:12px 10px 10px;background:var(--panel);border-bottom:1px solid var(--line);flex:none}
+  .step{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;position:relative;min-width:0}
+  .step::before{content:'';position:absolute;top:7px;right:50%;width:100%;height:2.5px;background:var(--line);z-index:0}
+  .step:first-child::before{display:none}
+  .step.done::before,.step.cur::before{background:var(--brand)}
+  .step .s-dot{width:16px;height:16px;border-radius:50%;background:var(--panel-3);border:2px solid var(--line);
+    z-index:1;display:grid;place-items:center;color:var(--brand-ink);box-sizing:border-box}
+  .step.done .s-dot{background:var(--brand);border-color:var(--brand)}
+  .step.cur .s-dot{background:var(--brand);border-color:var(--brand);box-shadow:0 0 0 4px var(--brand-weak)}
+  .step .s-lbl{font-size:9.5px;font-weight:600;color:var(--ink-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .step.done .s-lbl{color:var(--brand)}
+  .step.cur .s-lbl{color:var(--ink);font-weight:700}
   .ph-box{position:absolute;border:2px dashed var(--brand);border-radius:4px;
     background:color-mix(in oklch,var(--brand) 10%,transparent);z-index:2;pointer-events:none}
   .ph-boxtag{position:absolute;top:-1px;left:-1px;transform:translateY(-100%);
@@ -934,6 +956,23 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="qp-head"><b>Calidad de captura</b><span id="qp-overall" style="color:#8b93a4">analizando…</span></div>
         <div class="qp-chips" id="qp-chips"></div>
       </div>
+      <button class="badge cam-badge" id="btn-calib" style="position:absolute;top:14px;right:14px;z-index:6;border:0;cursor:pointer;font-family:inherit"></button>
+      <div id="calib" hidden style="position:absolute;inset:0;z-index:8">
+        <div style="position:absolute;inset:0;background:rgba(0,0,0,.2)"></div>
+        <div style="position:absolute;left:14px;right:14px;top:14px;background:rgba(12,16,22,.75);backdrop-filter:blur(10px);
+          border-radius:14px;padding:12px;border:1px solid rgba(255,255,255,.1);color:#dfe6ef;font-size:12.5px;line-height:1.5;z-index:3">
+          <b>Calibrar óptica de la cámara</b><br>
+          Coloca un folio A4 apaisado (29,7 cm) pegado a la pared, a <b>1 metro</b> de la cámara,
+          y ajusta las dos líneas a los bordes del folio.
+          <div id="cal-fov" style="font-family:var(--font-mono);margin-top:6px;color:var(--cam-accent)">Ajusta las líneas…</div>
+        </div>
+        <div class="cal-line" data-c="0"><span class="cal-knob"></span></div>
+        <div class="cal-line" data-c="1"><span class="cal-knob"></span></div>
+        <div style="position:absolute;left:14px;right:14px;bottom:14px;display:flex;gap:10px;z-index:3">
+          <button class="btn" id="btn-cal-cancel" style="flex:1;background:rgba(12,16,22,.75);color:#dfe6ef;border-color:rgba(255,255,255,.2)">Cancelar</button>
+          <button class="btn btn-primary" id="btn-cal-save" style="flex:1.4">Guardar calibración</button>
+        </div>
+      </div>
       <div class="card cam-fallback" id="cam-fallback" hidden>
         <b>La cámara en vivo está bloqueada.</b>
         <div id="cam-why" style="margin-top:8px;font-size:12px;color:var(--ink-dim);line-height:1.5"></div>
@@ -958,9 +997,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
       </div>
     </div>
     <div class="scroll">
-      <div class="photo" style="height:196px;flex:none">
-        <span class="ph-tag" id="rv-tag">captura</span><img id="rv-img" alt="Foto capturada de la pintada">
-        <div class="ph-box" id="rv-box" hidden><span class="ph-boxtag">pintada · detectada</span></div>
+      <div class="photo" style="height:250px;flex:none;background:#0b0e12" id="rv-photo">
+        <span class="ph-tag" id="rv-tag" style="z-index:6">contorno</span>
+        <div id="rv-fit" style="position:absolute">
+          <img id="rv-img" alt="Foto capturada de la pintada" style="position:absolute;inset:0;width:100%;height:100%">
+          <canvas id="rv-overlay" style="position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated"></canvas>
+        </div>
       </div>
       <div class="chiprow" id="rv-chips" style="gap:8px"></div>
       <div class="note-card" id="rv-dup" hidden><span data-ico="alert|18"></span><div id="rv-dup-txt"></div></div>
@@ -969,22 +1011,12 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="lbl" style="margin-bottom:9px">Tipo de pintada</div>
         <div class="chiprow" id="rv-tipos"></div>
         <div class="lbl" id="rv-sug" style="margin-top:8px;font-weight:500"></div>
-        <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <div>
-            <div class="lbl" style="margin-bottom:5px">Superficie</div>
-            <select id="rv-sup">
-              <option>Muro</option><option>Fachada</option><option>Persiana / cierre</option>
-              <option>Mobiliario urbano</option><option>Señalización</option><option>Patrimonio</option>
-            </select>
-          </div>
-          <div>
-            <div class="lbl" style="margin-bottom:5px">Tamaño estimado</div>
-            <select id="rv-tam">
-              <option value="Pequeño">Pequeño · &lt; 0,5 m²</option>
-              <option value="Medio" selected>Medio · ≈ 1 m²</option>
-              <option value="Grande">Grande · &gt; 2 m²</option>
-            </select>
-          </div>
+        <div style="margin-top:14px">
+          <div class="lbl" style="margin-bottom:5px">Superficie del soporte</div>
+          <select id="rv-sup">
+            <option>Muro</option><option>Fachada</option><option>Persiana / cierre</option>
+            <option>Mobiliario urbano</option><option>Señalización</option><option>Patrimonio</option>
+          </select>
         </div>
         <div class="lbl" style="margin:14px 0 7px">Severidad</div>
         <div class="chiprow" id="rv-sevs"></div>
@@ -998,6 +1030,14 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="meta-row"><span class="mk-k">Colores de la pintada</span><span class="mk-v" id="rv-colors"></span></div>
         <div class="meta-row"><span class="mk-k">Superficie pintada</span><span class="mk-v mono" id="rv-cob"></span></div>
         <div class="meta-row"><span class="mk-k">Tamaño estimado</span><span class="mk-v mono" id="rv-m2"></span></div>
+        <div style="padding:9px 0;border-bottom:1px solid var(--line-soft)">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:11.5px;font-weight:600;color:var(--ink-faint)">Distancia a la pintada</span>
+            <span style="font-size:13px;font-weight:600;font-family:var(--font-mono)" id="rv-dist-lbl">2,0 m</span>
+          </div>
+          <input type="range" id="rv-dist" min="0.5" max="6" step="0.1" value="2" style="width:100%">
+          <div style="font-size:11px;color:var(--ink-faint);margin-top:4px" id="rv-fov-note">Corrige la distancia estimada: los m² se calculan con el contorno validado y la óptica de la cámara (≈ 66°)</div>
+        </div>
         <div class="meta-row"><span class="mk-k">Trazo</span><span class="mk-v" id="rv-trazo"></span></div>
         <div class="meta-row"><span class="mk-k">Nitidez (VarLap)</span><span class="mk-v mono" id="rv-sharp"></span></div>
         <div class="meta-row"><span class="mk-k">Precisión GPS</span><span class="mk-v mono" id="rv-gps"></span></div>
@@ -1027,6 +1067,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
       </div>
       <span id="fi-sev"></span>
     </div>
+    <div class="stepper" id="fi-stepper" aria-label="Estados de tramitación"></div>
     <div class="scroll" id="fi-body"></div>
   </section>
 
@@ -1147,7 +1188,8 @@ var PATHS = {
   sync:'<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>',
   wifi:'<path d="M5 12a11 11 0 0 1 14 0"/><path d="M8.5 15.5a6 6 0 0 1 7 0"/><path d="M12 19h.01"/>',
   ext:'<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/>',
-  beaker:'<path d="M9 2h6"/><path d="M10 2v6.3L4.7 17a2.5 2.5 0 0 0 2.2 3.7h10.2a2.5 2.5 0 0 0 2.2-3.7L14 8.3V2"/><path d="M7 15h10"/>'
+  beaker:'<path d="M9 2h6"/><path d="M10 2v6.3L4.7 17a2.5 2.5 0 0 0 2.2 3.7h10.2a2.5 2.5 0 0 0 2.2-3.7L14 8.3V2"/><path d="M7 15h10"/>',
+  ruler:'<path d="M3 17 17 3l4 4L7 21z"/><path d="M8.5 13.5 10 15"/><path d="M11.5 10.5 13 12"/><path d="M14.5 7.5 16 9"/>'
 };
 function ico(name, size, sw){
   size = size || 20; sw = sw || 1.8;
@@ -1361,6 +1403,7 @@ function analyzeGraffiti(canvas){
   /* 9 · tamaño: ancho de escena supuesto 1,8 m a distancia recomendada */
   var sceneW=1.8, m2v=coverage*sceneW*(sceneW*h/w);
   return { box:[cs[0]/w*100, rsp[0]/h*100, bw/w*100, bh/h*100],
+    mask:mask, mw:w, mh:h,
     coverage:coverage, fill:fill, stroke:strokeNorm, nColores:nCol,
     colores:hex, sig:sig, tipoSug:tipo, m2:Math.max(0.1,Math.round(m2v*10)/10) };
 }
@@ -1504,9 +1547,35 @@ $('btn-shoot').addEventListener('click', function(){
   c.getContext('2d').drawImage(v,0,0,c.width,c.height);
   finishCapture(c);
 });
-$('file-input').addEventListener('change', function(e){
-  var f=e.target.files && e.target.files[0]; e.target.value='';
-  if(!f) return;
+/* ---- EXIF: distancia focal equivalente 35 mm (tag 0xA405) ---- */
+var pendingF35=null;
+function exifF35(buf){
+  try{
+    var v=new DataView(buf);
+    if(v.getUint16(0)!==0xFFD8) return null;
+    var o=2;
+    while(o+4<v.byteLength){
+      var marker=v.getUint16(o), size=v.getUint16(o+2);
+      if(marker===0xFFE1 && o+10<v.byteLength && v.getUint32(o+4)===0x45786966){
+        var t=o+10;
+        var little = v.getUint16(t)===0x4949;
+        var u16=function(p){return v.getUint16(p,little);};
+        var u32=function(p){return v.getUint32(p,little);};
+        var ifd0=t+u32(t+4), n=u16(ifd0), exifPtr=0, i, e;
+        for(i=0;i<n;i++){ e=ifd0+2+i*12; if(u16(e)===0x8769) exifPtr=u32(e+8); }
+        if(!exifPtr) return null;
+        var ifd=t+exifPtr; n=u16(ifd);
+        for(i=0;i<n;i++){ e=ifd+2+i*12;
+          if(u16(e)===0xA405){ var val=u16(e+8); return (val>3&&val<200)?val:null; } }
+        return null;
+      }
+      if((marker&0xFF00)!==0xFF00) break;
+      o+=2+size;
+    }
+  }catch(err){}
+  return null;
+}
+function canvasFromFile(f){
   var img=new Image();
   img.onload=function(){
     URL.revokeObjectURL(img.src);
@@ -1517,7 +1586,65 @@ $('file-input').addEventListener('change', function(e){
     finishCapture(c);
   };
   img.src=URL.createObjectURL(f);
+}
+$('file-input').addEventListener('change', function(e){
+  var f=e.target.files && e.target.files[0]; e.target.value='';
+  if(!f) return;
+  var fr=new FileReader();
+  fr.onload=function(){ pendingF35=exifF35(fr.result); canvasFromFile(f); };
+  fr.onerror=function(){ pendingF35=null; canvasFromFile(f); };
+  fr.readAsArrayBuffer(f);
 });
+
+/* ---- calibración de óptica con folio A4 a 1 m ---- */
+var calX=[0.3,0.7];
+function calFovNow(){
+  var v=$('video'); if(!v.videoWidth) return null;
+  var st=$('cam-stage'), cw=st.clientWidth, ch=st.clientHeight;
+  var scale=Math.max(cw/v.videoWidth, ch/v.videoHeight);
+  var fracVideo=((calX[1]-calX[0])*cw)/(v.videoWidth*scale);
+  if(fracVideo<=0.02) return null;
+  var fov=2*Math.atan(0.297/fracVideo/2)*180/Math.PI;
+  return (fov>=30&&fov<=110)? Math.round(fov*10)/10 : null;
+}
+function calRender(){
+  document.querySelectorAll('.cal-line').forEach(function(l){
+    l.style.left=(calX[+l.getAttribute('data-c')]*100)+'%';
+  });
+  var f=calFovNow();
+  $('cal-fov').textContent = f? 'Campo horizontal medido: '+String(f).replace('.',',')+'°' : 'Ajusta las líneas al folio…';
+  $('btn-cal-save').disabled=!f;
+}
+function updateCalibBtn(){
+  var f=localStorage.getItem('ut_fov');
+  $('btn-calib').innerHTML = ico('ruler',13)+' '+(f? 'Óptica '+String(f).replace('.',',')+'°' : 'Calibrar óptica');
+}
+$('btn-calib').addEventListener('click', function(){
+  if(!stream){ alert('La calibración necesita la cámara en vivo.'); return; }
+  $('calib').hidden=false; calRender();
+});
+$('btn-cal-cancel').addEventListener('click', function(){ $('calib').hidden=true; });
+$('btn-cal-save').addEventListener('click', function(){
+  var f=calFovNow(); if(!f) return;
+  localStorage.setItem('ut_fov', String(f));
+  $('calib').hidden=true; updateCalibBtn();
+});
+var calDrag=null;
+document.querySelectorAll('.cal-line').forEach(function(l){
+  l.addEventListener('pointerdown', function(e){
+    calDrag=+l.getAttribute('data-c'); l.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  l.addEventListener('pointermove', function(e){
+    if(calDrag===null || +l.getAttribute('data-c')!==calDrag) return;
+    var rc=$('cam-stage').getBoundingClientRect();
+    var nx=Math.min(0.98,Math.max(0.02,(e.clientX-rc.left)/rc.width));
+    if(calDrag===0) calX[0]=Math.min(nx,calX[1]-0.05); else calX[1]=Math.max(nx,calX[0]+0.05);
+    calRender();
+  });
+  l.addEventListener('pointerup', function(){ calDrag=null; });
+  l.addEventListener('pointercancel', function(){ calDrag=null; });
+});
+updateCalibBtn();
 
 /* ================= revisión ================= */
 var rvTipo='Tag/Firma', rvSev='media';
@@ -1538,6 +1665,109 @@ function renderTipoSev(){
       return {key:k,html:'<span class="dot bg-'+SEV[k].v+'"></span>'+SEV[k].label,onCls:'chip-'+SEV[k].v};
     }), rvSev, function(k){ rvSev=k; renderTipoSev(); });
 }
+/* ---- validación del contorno + superficie por distancia ---- */
+function tamCat(m){ return m<0.5?'Pequeño':(m<2?'Medio':'Grande'); }
+function setupReviewVisual(){
+  if(!draft) return;
+  var cont=$('rv-photo'), fit=$('rv-fit');
+  var cw=cont.clientWidth, ch=cont.clientHeight;
+  var sc=Math.min(cw/draft.w, ch/draft.h), fw=draft.w*sc, fh=draft.h*sc;
+  fit.style.left=((cw-fw)/2)+'px'; fit.style.top=((ch-fh)/2)+'px';
+  fit.style.width=fw+'px'; fit.style.height=fh+'px';
+  drawOverlay(); makeHandles(); calcM2();
+}
+function drawOverlay(){
+  var cv=$('rv-overlay'), an=draft.an;
+  var W=an?an.mw:160, H=an?an.mh:Math.max(1,Math.round(160*draft.h/draft.w));
+  cv.width=W; cv.height=H;
+  var x=cv.getContext('2d');
+  x.clearRect(0,0,W,H);
+  if(an && an.mask){
+    var img=x.createImageData(W,H);
+    for(var i=0;i<W*H;i++){
+      if(!an.mask[i]) continue;
+      var px=i%W, py=(i/W)|0;
+      var edge = px===0||py===0||px===W-1||py===H-1 ||
+        !an.mask[i-1]||!an.mask[i+1]||!an.mask[i-W]||!an.mask[i+W];
+      var o=i*4; img.data[o]=57; img.data[o+1]=209; img.data[o+2]=201;
+      img.data[o+3]=edge?235:55;
+    }
+    x.putImageData(img,0,0);
+  }
+  var b=draft.bboxN;
+  x.strokeStyle='rgba(255,255,255,.95)'; x.setLineDash([4,3]); x.lineWidth=1.4;
+  x.strokeRect(b[0]*W, b[1]*H, (b[2]-b[0])*W, (b[3]-b[1])*H);
+}
+function makeHandles(){
+  var fit=$('rv-fit');
+  fit.querySelectorAll('.handle').forEach(function(h){ h.remove(); });
+  for(var i=0;i<4;i++){
+    var h=document.createElement('div');
+    h.className='handle'; h.setAttribute('data-i',i);
+    h.addEventListener('pointerdown',hDown);
+    fit.appendChild(h);
+  }
+  updateHandles();
+}
+function updateHandles(){
+  var b=draft.bboxN;
+  var pos=[[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]]];
+  $('rv-fit').querySelectorAll('.handle').forEach(function(h){
+    var i=+h.getAttribute('data-i');
+    h.style.left=(pos[i][0]*100)+'%'; h.style.top=(pos[i][1]*100)+'%';
+  });
+}
+var dragH=null;
+function hDown(e){
+  dragH=e.currentTarget; e.preventDefault();
+  dragH.setPointerCapture(e.pointerId);
+  dragH.addEventListener('pointermove',hMove);
+  dragH.addEventListener('pointerup',hUp);
+  dragH.addEventListener('pointercancel',hUp);
+}
+function hMove(e){
+  if(!dragH||!draft) return;
+  var rc=$('rv-fit').getBoundingClientRect();
+  var nx=Math.min(1,Math.max(0,(e.clientX-rc.left)/rc.width));
+  var ny=Math.min(1,Math.max(0,(e.clientY-rc.top)/rc.height));
+  var i=+dragH.getAttribute('data-i'), b=draft.bboxN;
+  if(i===0||i===3) b[0]=Math.min(nx,b[2]-.05); else b[2]=Math.max(nx,b[0]+.05);
+  if(i===0||i===1) b[1]=Math.min(ny,b[3]-.05); else b[3]=Math.max(ny,b[1]+.05);
+  drawOverlay(); updateHandles(); calcM2();
+}
+function hUp(){
+  if(!dragH) return;
+  dragH.removeEventListener('pointermove',hMove);
+  dragH.removeEventListener('pointerup',hUp);
+  dragH.removeEventListener('pointercancel',hUp);
+  dragH=null;
+}
+function calcM2(){
+  if(!draft) return;
+  var b=draft.bboxN, frac;
+  if(draft.an && draft.an.mask){
+    var W=draft.an.mw, H=draft.an.mh, cnt=0;
+    var x0=Math.max(0,Math.floor(b[0]*W)), x1=Math.min(W,Math.ceil(b[2]*W));
+    var y0=Math.max(0,Math.floor(b[1]*H)), y1=Math.min(H,Math.ceil(b[3]*H));
+    for(var y=y0;y<y1;y++) for(var x=x0;x<x1;x++) if(draft.an.mask[y*W+x]) cnt++;
+    frac=cnt/(W*H);
+    if(cnt < (x1-x0)*(y1-y0)*0.05) frac=(b[2]-b[0])*(b[3]-b[1])*0.75;
+  } else frac=(b[2]-b[0])*(b[3]-b[1])*0.75;
+  var d=draft.dist||2;
+  var half=(draft.fov||66)/2*Math.PI/180;
+  var wM=2*d*Math.tan(half);
+  var hM=wM*draft.h/draft.w;
+  draft.m2=Math.max(0.05, Math.round(frac*wM*hM*100)/100);
+  $('rv-cob').textContent=Math.round(frac*100)+' % del encuadre';
+  $('rv-m2').textContent=String(draft.m2).replace('.',',')+' m² · '+tamCat(draft.m2);
+}
+$('rv-dist').addEventListener('input', function(){
+  if(!draft) return;
+  draft.dist=Math.round(parseFloat(this.value)*10)/10;
+  $('rv-dist-lbl').textContent=String(this.value).replace('.',',')+' m';
+  calcM2();
+});
+
 function finishCapture(canvas){
   stopCamera();
   var dataUrl=canvas.toDataURL('image/jpeg',0.82);
@@ -1546,13 +1776,23 @@ function finishCapture(canvas){
   var colors = an && an.colores.length ? an.colores : domColors(canvas);
   draft={ foto:dataUrl, sharp:Math.round(q.sharp), colores:colors, an:an,
           lat:lastFix?lastFix.lat:null, lon:lastFix?lastFix.lon:null, acc:lastFix?lastFix.acc:null };
+  draft.w=canvas.width; draft.h=canvas.height;
+  draft.dist=2.0;
+  var calF=parseFloat(localStorage.getItem('ut_fov')||'');
+  if(pendingF35){
+    draft.fov=Math.round(2*Math.atan((canvas.width>=canvas.height?18:12)/pendingF35)*180/Math.PI*10)/10;
+    draft.fovSrc='EXIF del móvil';
+  } else if(calF>0){ draft.fov=calF; draft.fovSrc='calibrada con folio A4'; }
+  else { draft.fov=66; draft.fovSrc='estimada por defecto'; }
+  pendingF35=null;
+  $('rv-fov-note').textContent='Corrige la distancia estimada: los m² se calculan con el contorno validado y óptica de '+
+    String(draft.fov).replace('.',',')+'° ('+draft.fovSrc+')';
+  draft.bboxN = an
+    ? [an.box[0]/100, an.box[1]/100, Math.min(1,(an.box[0]+an.box[2])/100), Math.min(1,(an.box[1]+an.box[3])/100)]
+    : [.2,.25,.8,.75];
   $('rv-img').src=dataUrl;
-  var bx=$('rv-box');
-  if(an){
-    bx.hidden=false;
-    bx.style.left=an.box[0]+'%'; bx.style.top=an.box[1]+'%';
-    bx.style.width=an.box[2]+'%'; bx.style.height=an.box[3]+'%';
-  } else bx.hidden=true;
+  $('rv-dist').value=2; $('rv-dist-lbl').textContent='2,0 m';
+  $('rv-tag').textContent = an ? 'contorno detectado · valida o ajusta' : 'sin detección · marca la zona';
   var chips=[];
   if(draft.sharp>=60) chips.push('<span class="badge chip-low">'+ico('check',12)+'Nitidez buena</span>');
   else chips.push('<span class="badge chip-warn">'+ico('alert',12)+'Nitidez baja</span>');
@@ -1560,18 +1800,18 @@ function finishCapture(canvas){
     chips.push('<span class="badge '+(draft.acc<=25?'chip-low':'chip-warn')+'">'+ico('gps',12)+'± '+Math.round(draft.acc)+' m</span>');
   } else chips.push('<span class="badge chip-crit">'+ico('alert',12)+'Sin ubicación</span>');
   chips.push('<span class="badge chip-mut">'+ico('shield',12)+'Difuminado · Fase 2</span>');
+  chips.unshift(an
+    ? '<span class="badge chip-low">'+ico('check',12)+'Contorno detectado</span>'
+    : '<span class="badge chip-warn">'+ico('alert',12)+'Contorno manual</span>');
   $('rv-chips').innerHTML=chips.join('');
   $('rv-colors').innerHTML = draft.colores.map(function(c){
     return '<span style="display:inline-block;width:15px;height:15px;border-radius:4px;background:'+c+';border:1px solid var(--line);margin-left:4px;vertical-align:middle"></span>';
   }).join('') || '—';
   $('rv-sharp').textContent=draft.sharp;
   $('rv-gps').textContent = draft.acc!=null ? '± '+Math.round(draft.acc)+' m' : 'no disponible';
-  $('rv-cob').textContent = an ? Math.round(an.coverage*100)+' % del encuadre' : 'sin detección';
-  $('rv-m2').textContent = an ? '≈ '+String(an.m2).replace('.',',')+' m² (aprox.)' : '—';
   $('rv-trazo').textContent = an
     ? (an.stroke<0.03?'Fino':(an.stroke<0.07?'Medio':'Grueso'))+' · '+an.nColores+' color'+(an.nColores>1?'es':'')
     : '—';
-  if(an) $('rv-tam').value = an.m2<0.5?'Pequeño':(an.m2<2?'Medio':'Grande');
   rvTipo = an ? an.tipoSug : 'Tag/Firma';
   $('rv-sug').innerHTML = an
     ? 'Sugerencia del análisis: <b style="color:var(--brand)">'+an.tipoSug+'</b> — corrígela si no es correcta'
@@ -1591,6 +1831,7 @@ function finishCapture(canvas){
   }
   renderTipoSev();
   show('review');
+  requestAnimationFrame(setupReviewVisual);
 }
 $('btn-save').addEventListener('click', function(){
   if(!draft) return;
@@ -1601,12 +1842,15 @@ $('btn-save').addEventListener('click', function(){
       var seq=list.length+1, folio;
       do { folio='UT-'+yr+'-'+String(seq).padStart(4,'0'); seq++; }
       while(list.some(function(r){return r.folio===folio;}));
-      var tam=$('rv-tam').value, sup=$('rv-sup').value;
+      var sup=$('rv-sup').value;
+      var m2f = draft.m2!=null ? draft.m2 : (draft.an?draft.an.m2:1);
+      var tam = tamCat(m2f);
       return put({
         uuid:uuid(), folio:folio, fecha:new Date().toISOString(),
         foto:draft.foto, lat:draft.lat, lon:draft.lon, acc:draft.acc,
         sharp:draft.sharp, colores:draft.colores,
-        patron:draft.an?draft.an.sig:null, m2:draft.an?draft.an.m2:null,
+        patron:draft.an?draft.an.sig:null, m2:m2f, distancia:draft.dist||null, bbox:draft.bboxN,
+        fov:draft.fov||null, fovSrc:draft.fovSrc||null,
         tipoPintada:rvTipo, superficie:sup, tamano:tam, sev:rvSev,
         coste:coste(tam,sup,rvSev),
         notas:$('rv-notas').value.trim(), hash:hash,
@@ -1803,6 +2047,12 @@ function openFicha(u, origin){
     currentUuid=u;
     $('fi-folio').textContent=r.folio;
     $('fi-sev').innerHTML=sevBadge(r.sev);
+    var stepIdx=ESTADOS.indexOf(r.estado);
+    $('fi-stepper').innerHTML = ESTADOS.map(function(e,i){
+      var cls = i<stepIdx ? 'done' : (i===stepIdx ? 'cur' : '');
+      return '<div class="step '+cls+'"><span class="s-dot">'+(i<stepIdx?ico('check',9,3.2):'')+'</span>'+
+        '<span class="s-lbl">'+e+'</span></div>';
+    }).join('');
     var mapsLink = r.lat!=null
       ? '<a class="ext" href="https://maps.google.com/?q='+r.lat+','+r.lon+'" target="_blank" rel="noopener">Ver en Google Maps '+ico('ext',12)+'</a>'
       : '—';
@@ -1857,7 +2107,9 @@ function openFicha(u, origin){
       '<div class="card" style="padding:14px">'+
         '<div class="lbl" style="margin-bottom:4px">Clasificación y daño</div>'+
         metaRow('Tipo · superficie', esc(r.tipoPintada)+' · '+esc(r.superficie))+
-        metaRow('Tamaño', r.tamano + (r.m2? ' · ≈ '+String(r.m2).replace('.',',')+' m²':''), true)+
+        metaRow('Tamaño', r.tamano + (r.m2? ' · ≈ '+String(r.m2).replace('.',',')+' m²':'')
+          + (r.distancia? ' · a '+String(r.distancia).replace('.',',')+' m':''), true)+
+        (r.fov? metaRow('Óptica usada', String(r.fov).replace('.',',')+'° · '+(r.fovSrc||''), true):'')+
         metaRow('Colores', (r.colores||[]).map(function(c){
           return '<span style="display:inline-block;width:14px;height:14px;border-radius:4px;background:'+c+';border:1px solid var(--line);margin-left:4px;vertical-align:middle"></span>';}).join('')||'—')+
         metaRow('Coste estimado limpieza', r.coste+' €', true)+
@@ -2049,7 +2301,7 @@ function seedDemo(){
           lat:pos.lat, lon:pos.lon, acc:Math.round(4+r()*22),
           sharp:Math.round(90+r()*280),
           colores: an&&an.colores.length? an.colores : pal.slice(0,3),
-          patron: an? an.sig : null, m2: an? an.m2 : null,
+          patron: an? an.sig : null, m2: an? an.m2 : null, distancia: Math.round((1+r()*3)*10)/10,
           tipoPintada: an? an.tipoSug : TIPOS[Math.floor(r()*TIPOS.length)], superficie:sup, tamano:tam,
           sev:sevs[i], coste:coste(tam,sup,sevs[i]), notas:notas[i]||'',
           usuario:'agente.demo', dispositivo:'Datos de prueba',
