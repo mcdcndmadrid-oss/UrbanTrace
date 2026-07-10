@@ -1007,13 +1007,24 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <span class="ph-tag" id="rv-tag" style="z-index:6">contorno</span>
         <div id="rv-fit" style="position:absolute">
           <img id="rv-img" alt="Foto capturada de la pintada" style="position:absolute;inset:0;width:100%;height:100%">
-          <canvas id="rv-overlay" style="position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated"></canvas>
+          <canvas id="rv-overlay" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
         </div>
         <button class="badge cam-badge" id="rv-zoom" style="position:absolute;right:8px;bottom:8px;z-index:6;border:0;cursor:pointer;font-family:inherit"></button>
       </div>
       <button class="btn btn-primary" id="btn-reanalizar" hidden style="flex:none">
         <span data-ico="sync|16"></span> Recalcular contorno, colores y patrón
       </button>
+      <div class="card" id="rv-patron" hidden style="padding:10px 12px;display:flex;align-items:center;gap:10px;flex:none">
+        <span style="color:var(--ok);display:flex" data-ico="check|17"></span>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:13px">Patrón detectado</div>
+          <div class="chiprow" id="rv-rasgos" style="margin-top:5px"></div>
+        </div>
+        <div style="text-align:right;flex:none">
+          <div style="font-family:var(--font-mono);font-weight:700;font-size:16px;color:var(--brand)" id="rv-conf"></div>
+          <div class="lbl" style="font-size:9px">confianza</div>
+        </div>
+      </div>
       <div class="chiprow" id="rv-chips" style="gap:8px"></div>
       <div class="note-card" id="rv-dup" hidden><span data-ico="alert|18"></span><div id="rv-dup-txt"></div></div>
 
@@ -1435,10 +1446,47 @@ function analyzeGraffiti(canvas){
   else if(fill>0.5 && strokeNorm>0.05 && coverage>0.08) tipo='Throw-up';
   else if(fill>0.45 && nCol<=2 && coverage<0.12) tipo=(bw/bh>0.6 && bw/bh<1.7)?'Símbolo':'Plantilla';
   else tipo='Tag/Firma';
-  /* 9 · tamaño: ancho de escena supuesto 1,8 m a distancia recomendada */
+  /* 9 · componentes conexas: letras / segmentos independientes */
+  var lblc=new Int32Array(w*h), comps=[], cstack=[];
+  for(i=0;i<w*h;i++){
+    if(!mask[i]||lblc[i]) continue;
+    var cid=comps.length+1, csz=0, cx0=w,cy0=h,cx1=0,cy1=0;
+    cstack.push(i); lblc[i]=cid;
+    while(cstack.length){
+      var cp=cstack.pop(); csz++;
+      var cpy=(cp/w)|0, cpx=cp%w;
+      if(cpx<cx0)cx0=cpx; if(cpx>cx1)cx1=cpx; if(cpy<cy0)cy0=cpy; if(cpy>cy1)cy1=cpy;
+      if(cpx>0 && mask[cp-1]&&!lblc[cp-1]){ lblc[cp-1]=cid; cstack.push(cp-1); }
+      if(cpx<w-1 && mask[cp+1]&&!lblc[cp+1]){ lblc[cp+1]=cid; cstack.push(cp+1); }
+      if(cpy>0 && mask[cp-w]&&!lblc[cp-w]){ lblc[cp-w]=cid; cstack.push(cp-w); }
+      if(cpy<h-1 && mask[cp+w]&&!lblc[cp+w]){ lblc[cp+w]=cid; cstack.push(cp+w); }
+    }
+    comps.push({n:csz, b:[cx0/w, cy0/h, (cx1+1)/w, (cy1+1)/h]});
+  }
+  comps.sort(function(a4,b4){return b4.n-a4.n;});
+  comps=comps.filter(function(c4){return c4.n>count*0.04;}).slice(0,6);
+  /* 10 · simetría horizontal dentro de la caja */
+  var simn=0, simd=0;
+  for(y=rsp[0];y<=rsp[1];y++)for(xx=cs[0];xx<=cs[1];xx++){
+    var v1=mask[y*w+xx], v2=mask[y*w+(cs[1]-(xx-cs[0]))];
+    if(v1||v2){ simd++; if(v1&&v2) simn++; }
+  }
+  var sym= simd? simn/simd : 0;
+  var compact = count? (per*per)/(12.57*count) : 0;
+  /* 11 · rasgos legibles del patrón + confianza heurística */
+  var rasgos=[];
+  if(comps.length>=2) rasgos.push('Letras/segmentos');
+  if(compact>3) rasgos.push('Curvas');
+  if(fill>0.45) rasgos.push('Relleno');
+  if(nCol>=2) rasgos.push('Contorno');
+  if(sym>0.55) rasgos.push('Simetría');
+  if(!rasgos.length) rasgos.push('Trazo simple');
+  var conf=Math.max(35, Math.min(96, Math.round(40 + fill*25 + Math.min(25,coverage*180) + (nCol>=2?6:0))));
+  /* 12 · tamaño: ancho de escena supuesto 1,8 m a distancia recomendada */
   var sceneW=1.8, m2v=coverage*sceneW*(sceneW*h/w);
   return { box:[cs[0]/w*100, rsp[0]/h*100, bw/w*100, bh/h*100],
     mask:mask, mw:w, mh:h,
+    comps:comps.map(function(c5){return c5.b;}), rasgos:rasgos, conf:conf, sym:Math.round(sym*100)/100,
     coverage:coverage, fill:fill, stroke:strokeNorm, nColores:nCol,
     colores:hex, sig:sig, tipoSug:tipo, m2:Math.max(0.1,Math.round(m2v*10)/10) };
 }
@@ -1783,31 +1831,71 @@ function rvZoom(on){
 $('rv-zoom').addEventListener('click', function(){ rvZoom(!draft.zoomed); });
 function drawOverlay(){
   var cv=$('rv-overlay'), an=draft.an;
-  var OW=320, OH=Math.max(1,Math.round(OW*draft.h/draft.w));
+  var OW=560, OH=Math.max(1,Math.round(OW*draft.h/draft.w));
   cv.width=OW; cv.height=OH;
   var x=cv.getContext('2d');
-  x.imageSmoothingEnabled=false;
   x.clearRect(0,0,OW,OH);
-  if(an && an.mask){
-    var W=an.mw, H=an.mh;
-    var mc=document.createElement('canvas'); mc.width=W; mc.height=H;
-    var mx=mc.getContext('2d');
-    var img=mx.createImageData(W,H);
-    for(var i=0;i<W*H;i++){
+  if(an && an.mask && draft.srcCanvas){
+    var W=an.mw, H=an.mh, rg=draft.anRegion||[0,0,1,1];
+    var rx=rg[0]*OW, ry=rg[1]*OH, rw=(rg[2]-rg[0])*OW, rh=(rg[3]-rg[1])*OH;
+    /* fondo desaturado y oscurecido: la pintada destaca a todo color */
+    x.filter='grayscale(.92) brightness(.55)';
+    x.drawImage(draft.srcCanvas,0,0,OW,OH);
+    x.filter='none';
+    var mA=document.createElement('canvas'); mA.width=W; mA.height=H;
+    var mi=mA.getContext('2d').createImageData(W,H);
+    for(var i=0;i<W*H;i++){ if(an.mask[i]) mi.data[i*4+3]=255; }
+    mA.getContext('2d').putImageData(mi,0,0);
+    var tmp=document.createElement('canvas'); tmp.width=OW; tmp.height=OH;
+    var t=tmp.getContext('2d');
+    t.drawImage(draft.srcCanvas,0,0,OW,OH);
+    t.globalCompositeOperation='destination-in';
+    t.imageSmoothingEnabled=false;
+    t.drawImage(mA, rx,ry,rw,rh);
+    x.drawImage(tmp,0,0);
+    /* contorno fino + nodos tipo vector */
+    var edges=[];
+    for(i=0;i<W*H;i++){
       if(!an.mask[i]) continue;
       var px=i%W, py=(i/W)|0;
-      var edge = px===0||py===0||px===W-1||py===H-1 ||
-        !an.mask[i-1]||!an.mask[i+1]||!an.mask[i-W]||!an.mask[i+W];
-      var o=i*4; img.data[o]=57; img.data[o+1]=209; img.data[o+2]=201;
-      img.data[o+3]=edge?235:60;
+      if(px===0||py===0||px===W-1||py===H-1||!an.mask[i-1]||!an.mask[i+1]||!an.mask[i-W]||!an.mask[i+W]) edges.push(i);
     }
-    mx.putImageData(img,0,0);
-    var rg=draft.anRegion||[0,0,1,1];
-    x.drawImage(mc, rg[0]*OW, rg[1]*OH, (rg[2]-rg[0])*OW, (rg[3]-rg[1])*OH);
+    x.fillStyle='rgba(57,209,201,.9)';
+    for(i=0;i<edges.length;i++){
+      x.fillRect(rx+(edges[i]%W+0.5)/W*rw-0.7, ry+((edges[i]/W|0)+0.5)/H*rh-0.7, 1.4, 1.4);
+    }
+    var step=Math.max(4,Math.round(edges.length/110));
+    for(i=0;i<edges.length;i+=step){
+      var nx=rx+(edges[i]%W+0.5)/W*rw, ny=ry+((edges[i]/W|0)+0.5)/H*rh;
+      x.beginPath(); x.arc(nx,ny,2.6,0,6.284);
+      x.fillStyle='#39d1c9'; x.fill();
+      x.lineWidth=1; x.strokeStyle='rgba(255,255,255,.9)'; x.setLineDash([]); x.stroke();
+    }
+    /* caja por letra / segmento detectado */
+    if(an.comps){
+      var pal=['#8be04a','#e05ad0','#e8c23a','#5aa9e0','#e0705a','#a05ae0'];
+      x.lineWidth=1.4; x.setLineDash([5,4]);
+      an.comps.forEach(function(cb,ci){
+        x.strokeStyle=pal[ci%pal.length];
+        x.strokeRect(rx+cb[0]*rw, ry+cb[1]*rh, (cb[2]-cb[0])*rw, (cb[3]-cb[1])*rh);
+      });
+    }
+  } else if(draft.srcCanvas){
+    x.drawImage(draft.srcCanvas,0,0,OW,OH);
   }
   var b=draft.bboxN;
   x.strokeStyle='rgba(255,255,255,.95)'; x.setLineDash([5,4]); x.lineWidth=1.6;
   x.strokeRect(b[0]*OW, b[1]*OH, (b[2]-b[0])*OW, (b[3]-b[1])*OH);
+  x.setLineDash([]);
+}
+function renderPatron(){
+  var an=draft?draft.an:null, el=$('rv-patron');
+  if(!an){ el.hidden=true; return; }
+  el.hidden=false;
+  $('rv-rasgos').innerHTML=(an.rasgos||[]).map(function(rs){
+    return '<span class="badge chip-brand">'+rs+'</span>';
+  }).join('');
+  $('rv-conf').textContent=(an.conf||0)+' %';
 }
 function reanalyze(){
   if(!draft || !draft.srcCanvas) return;
@@ -1834,6 +1922,7 @@ function reanalyze(){
     draft.an=null; draft.anRegion=null;
     $('rv-tag').textContent='sin detección en la zona · recuadro manual';
   }
+  renderPatron();
   drawOverlay(); calcM2();
   $('btn-reanalizar').hidden=true;
   rvZoom(true);
@@ -1962,6 +2051,7 @@ function finishCapture(canvas, origP){
     ? '<span class="badge chip-low">'+ico('check',12)+'Contorno detectado</span>'
     : '<span class="badge chip-warn">'+ico('alert',12)+'Contorno manual</span>');
   $('rv-chips').innerHTML=chips.join('');
+  renderPatron();
   $('rv-colors').innerHTML = draft.colores.map(function(c){
     return '<span style="display:inline-block;width:15px;height:15px;border-radius:4px;background:'+c+';border:1px solid var(--line);margin-left:4px;vertical-align:middle"></span>';
   }).join('') || '—';
@@ -2016,6 +2106,8 @@ $('btn-save').addEventListener('click', function(){
         maskB64: draft.an&&draft.an.mask? packMask(draft.an.mask):null,
         maskW: draft.an?draft.an.mw:null, maskH: draft.an?draft.an.mh:null,
         maskRegion: draft.anRegion||null,
+        rasgos: draft.an?draft.an.rasgos:null, confianza: draft.an?draft.an.conf:null,
+        comps: draft.an?draft.an.comps:null,
         fov:draft.fov||null, fovSrc:draft.fovSrc||null,
         tipoPintada:rvTipo, superficie:sup, tamano:tam, sev:rvSev,
         coste:coste(tam,sup,rvSev),
@@ -2238,26 +2330,49 @@ function applyFichaContour(r){
   if(!W||!H) return;
   var mask=unpackMask(r.maskB64, W*H);
   var img=$('fi-img');
-  var iw=img&&img.naturalWidth?img.naturalWidth:4, ih=img&&img.naturalHeight?img.naturalHeight:3;
-  var OW=320, OH=Math.max(1,Math.round(OW*ih/iw));
+  if(!img || !img.naturalWidth) return;
+  var iw=img.naturalWidth, ih=img.naturalHeight;
+  var OW=560, OH=Math.max(1,Math.round(OW*ih/iw));
   cv.width=OW; cv.height=OH;
-  var x=cv.getContext('2d'); x.imageSmoothingEnabled=false;
-  x.clearRect(0,0,OW,OH);
-  var mc=document.createElement('canvas'); mc.width=W; mc.height=H;
-  var mi=mc.getContext('2d').createImageData(W,H);
-  for(var i=0;i<W*H;i++){
+  var x=cv.getContext('2d');
+  var rg=r.maskRegion||[0,0,1,1];
+  var rx=rg[0]*OW, ry=rg[1]*OH, rw=(rg[2]-rg[0])*OW, rh=(rg[3]-rg[1])*OH;
+  /* fondo desaturado, pintada a color */
+  x.filter='grayscale(.92) brightness(.55)';
+  x.drawImage(img,0,0,OW,OH);
+  x.filter='none';
+  var mA=document.createElement('canvas'); mA.width=W; mA.height=H;
+  var mi=mA.getContext('2d').createImageData(W,H);
+  for(var i=0;i<W*H;i++){ if(mask[i]) mi.data[i*4+3]=255; }
+  mA.getContext('2d').putImageData(mi,0,0);
+  var tmp=document.createElement('canvas'); tmp.width=OW; tmp.height=OH;
+  var t=tmp.getContext('2d');
+  t.drawImage(img,0,0,OW,OH);
+  t.globalCompositeOperation='destination-in';
+  t.imageSmoothingEnabled=false;
+  t.drawImage(mA, rx,ry,rw,rh);
+  x.drawImage(tmp,0,0);
+  x.fillStyle='rgba(57,209,201,.85)';
+  for(i=0;i<W*H;i++){
     if(!mask[i]) continue;
     var px=i%W, py=(i/W)|0;
-    var edge=px===0||py===0||px===W-1||py===H-1||!mask[i-1]||!mask[i+1]||!mask[i-W]||!mask[i+W];
-    var o=i*4; mi.data[o]=57; mi.data[o+1]=209; mi.data[o+2]=201; mi.data[o+3]=edge?235:60;
+    if(px===0||py===0||px===W-1||py===H-1||!mask[i-1]||!mask[i+1]||!mask[i-W]||!mask[i+W]){
+      x.fillRect(rx+(px+0.5)/W*rw-0.7, ry+(py+0.5)/H*rh-0.7, 1.4, 1.4);
+    }
   }
-  mc.getContext('2d').putImageData(mi,0,0);
-  var rg=r.maskRegion||[0,0,1,1];
-  x.drawImage(mc, rg[0]*OW, rg[1]*OH, (rg[2]-rg[0])*OW, (rg[3]-rg[1])*OH);
+  if(r.comps){
+    var pal=['#8be04a','#e05ad0','#e8c23a','#5aa9e0','#e0705a','#a05ae0'];
+    x.lineWidth=1.4; x.setLineDash([5,4]);
+    r.comps.forEach(function(cb,ci){
+      x.strokeStyle=pal[ci%pal.length];
+      x.strokeRect(rx+cb[0]*rw, ry+cb[1]*rh, (cb[2]-cb[0])*rw, (cb[3]-cb[1])*rh);
+    });
+  }
   if(r.bbox){
     x.setLineDash([5,4]); x.strokeStyle='rgba(255,255,255,.95)'; x.lineWidth=1.6;
     x.strokeRect(r.bbox[0]*OW, r.bbox[1]*OH, (r.bbox[2]-r.bbox[0])*OW, (r.bbox[3]-r.bbox[1])*OH);
   }
+  x.setLineDash([]);
 }
 function openFicha(u, origin){
   if(origin) fichaOrigin=origin;
@@ -2285,7 +2400,7 @@ function openFicha(u, origin){
         '<span class="ph-tag" style="z-index:6">'+tag+'</span>'+
         '<div id="fi-fit" style="position:absolute">'+
           '<img id="fi-img" src="'+r.foto+'" alt="Foto del incidente" style="position:absolute;inset:0;width:100%;height:100%">'+
-          '<canvas id="fi-overlay" style="position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated;display:none"></canvas>'+
+          '<canvas id="fi-overlay" style="position:absolute;inset:0;width:100%;height:100%;display:none"></canvas>'+
         '</div>'+
         (r.bbox? '<span id="fi-zoom-hint" style="position:absolute;right:8px;bottom:8px;z-index:6;font-family:var(--font-mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;background:rgba(8,10,14,.6);color:#e8edf4;padding:2px 7px;border-radius:5px"></span>':'')+
         '</div>';
@@ -2350,6 +2465,8 @@ function openFicha(u, origin){
         (r.fov? metaRow('Óptica usada', String(r.fov).replace('.',',')+'° · '+(r.fovSrc||''), true):'')+
         metaRow('Colores', (r.colores||[]).map(function(c){
           return '<span style="display:inline-block;width:14px;height:14px;border-radius:4px;background:'+c+';border:1px solid var(--line);margin-left:4px;vertical-align:middle"></span>';}).join('')||'—')+
+        (r.rasgos&&r.rasgos.length? metaRow('Rasgos del patrón',
+          esc(r.rasgos.join(' · '))+(r.confianza?' · conf. '+r.confianza+' %':'')) : '')+
         metaRow('Coste estimado limpieza', r.coste+' €', true)+
         (r.notas? metaRow('Notas', esc(r.notas)) : '')+
       '</div>'+
@@ -2616,6 +2733,7 @@ function seedDemo(){
           patron: an? an.sig : null, m2: an? an.m2 : null, distancia: Math.round((1+r()*3)*10)/10,
           maskB64: an&&an.mask? packMask(an.mask):null, maskW: an?an.mw:null, maskH: an?an.mh:null,
           maskRegion: an?[0,0,1,1]:null,
+          rasgos: an?an.rasgos:null, confianza: an?an.conf:null, comps: an?an.comps:null,
           bbox: an? [an.box[0]/100, an.box[1]/100, Math.min(1,(an.box[0]+an.box[2])/100), Math.min(1,(an.box[1]+an.box[3])/100)] : null,
           tipoPintada: an? an.tipoSug : TIPOS[Math.floor(r()*TIPOS.length)], superficie:sup, tamano:tam,
           sev:sevs[i], coste:coste(tam,sup,sevs[i]), notas:notas[i]||'',
